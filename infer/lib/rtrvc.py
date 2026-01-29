@@ -17,6 +17,9 @@ import torch.nn.functional as F
 import torchcrepe
 from torchaudio.transforms import Resample
 
+# Fix for PyTorch 2.6+ weights_only default change
+torch.serialization.add_safe_globals([fairseq.data.dictionary.Dictionary])
+
 now_dir = os.getcwd()
 sys.path.append(now_dir)
 from multiprocessing import Manager as M

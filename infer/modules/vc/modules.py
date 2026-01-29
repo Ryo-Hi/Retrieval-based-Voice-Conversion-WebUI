@@ -180,10 +180,13 @@ class VC:
                     .strip(" ")
                     .replace("trained", "added")
                 )
+                logger.info(f"Using index file: {file_index}")
             elif file_index2:
                 file_index = file_index2
+                logger.info(f"Using fallback index file: {file_index2}")
             else:
                 file_index = ""  # 防止小白写错，自动帮他替换掉
+                logger.info("No index file provided")
 
             audio_opt = self.pipeline.pipeline(
                 self.hubert_model,

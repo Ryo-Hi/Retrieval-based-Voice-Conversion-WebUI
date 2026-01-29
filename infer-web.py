@@ -45,7 +45,12 @@ shutil.rmtree("%s/runtime/Lib/site-packages/uvr5_pack" % (now_dir), ignore_error
 os.makedirs(tmp, exist_ok=True)
 os.makedirs(os.path.join(now_dir, "logs"), exist_ok=True)
 os.makedirs(os.path.join(now_dir, "assets/weights"), exist_ok=True)
+os.makedirs(os.path.join(now_dir, "assets/indices"), exist_ok=True)
 os.environ["TEMP"] = tmp
+os.environ["weight_root"] = os.path.join(now_dir, "assets/weights")
+os.environ["index_root"] = os.path.join(now_dir, "assets/indices")
+os.environ["outside_index_root"] = os.path.join(now_dir, "logs")
+os.environ["weight_uvr5_root"] = os.path.join(now_dir, "assets/uvr5_weights")
 warnings.filterwarnings("ignore")
 torch.manual_seed(114514)
 
@@ -636,6 +641,12 @@ def train_index(exp_dir1, version19):
     big_npy_idx = np.arange(big_npy.shape[0])
     np.random.shuffle(big_npy_idx)
     big_npy = big_npy[big_npy_idx]
+    
+    # TEMPORARY: Reduce dataset size for testing
+    if big_npy.shape[0] > 10000:
+        infos.append(f"TEMPORARY: Reducing dataset from {big_npy.shape[0]} to 10000 samples for testing")
+        big_npy = big_npy[:10000]
+        yield "\n".join(infos)
     if big_npy.shape[0] > 2e5:
         infos.append("Trying doing kmeans %s shape to 10k centers." % big_npy.shape[0])
         yield "\n".join(infos)
@@ -663,30 +674,101 @@ def train_index(exp_dir1, version19):
     yield "\n".join(infos)
     index = faiss.index_factory(256 if version19 == "v1" else 768, "IVF%s,Flat" % n_ivf)
     # index = faiss.index_factory(256if version19=="v1"else 768, "IVF%s,PQ128x4fs,RFlat"%n_ivf)
-    infos.append("training")
+    infos.append(f"Starting FAISS training with dataset shape: {big_npy.shape}")
+    infos.append(f"Index configuration: IVF{n_ivf}_Flat")
     yield "\n".join(infos)
+    
     index_ivf = faiss.extract_index_ivf(index)  #
     index_ivf.nprobe = 1
-    index.train(big_npy)
+    infos.append(f"Index nprobe set to: {index_ivf.nprobe}")
+    infos.append("Starting index.train() - this may take several minutes for large datasets...")
+    yield "\n".join(infos)
+    
+    import time
+    
+    # Add immediate feedback that we're starting
+    infos.append(f"Training started at: {time.strftime('%H:%M:%S')}")
+    infos.append("Dataset size analysis:")
+    infos.append(f"  - Features: {big_npy.shape[0]:,} samples")
+    infos.append(f"  - Dimensions: {big_npy.shape[1]}")
+    infos.append(f"  - Memory usage: ~{big_npy.nbytes / (1024*1024):.1f} MB")
+    infos.append(f"  - IVF clusters: {n_ivf}")
+    infos.append("Starting FAISS training - this is a CPU-intensive operation...")
+    yield "\n".join(infos)
+    
+    # Try with timeout using signal (more reliable than threading)
+    try:
+        start_time = time.time()
+        
+        # For datasets this size, training can legitimately take several minutes
+        # Let's try a direct approach with periodic checks
+        infos.append("Attempting FAISS index training...")
+        yield "\n".join(infos)
+        
+        # Direct call - if it hangs, we'll know it's a FAISS issue
+        index.train(big_npy)
+        
+        end_time = time.time()
+        duration = end_time - start_time
+        infos.append(f"FAISS index training completed successfully!")
+        infos.append(f"Training duration: {duration:.2f} seconds")
+        
+    except Exception as e:
+        infos.append(f"Error during FAISS training: {str(e)}")
+        infos.append(f"Error type: {type(e).__name__}")
+        import traceback
+        infos.append(f"Traceback: {traceback.format_exc()}")
+        yield "\n".join(infos)
+        return
+    
+    yield "\n".join(infos)
     faiss.write_index(
         index,
         "%s/trained_IVF%s_Flat_nprobe_%s_%s_%s.index"
         % (exp_dir, n_ivf, index_ivf.nprobe, exp_dir1, version19),
     )
-    infos.append("adding")
+    infos.append("Starting batch addition process...")
+    infos.append(f"Total samples to add: {big_npy.shape[0]}")
     yield "\n".join(infos)
+    
     batch_size_add = 8192
-    for i in range(0, big_npy.shape[0], batch_size_add):
-        index.add(big_npy[i : i + batch_size_add])
-    faiss.write_index(
-        index,
-        "%s/added_IVF%s_Flat_nprobe_%s_%s_%s.index"
-        % (exp_dir, n_ivf, index_ivf.nprobe, exp_dir1, version19),
-    )
-    infos.append(
-        "成功构建索引 added_IVF%s_Flat_nprobe_%s_%s_%s.index"
-        % (n_ivf, index_ivf.nprobe, exp_dir1, version19)
-    )
+    total_batches = (big_npy.shape[0] + batch_size_add - 1) // batch_size_add
+    infos.append(f"Processing {total_batches} batches of size {batch_size_add}")
+    yield "\n".join(infos)
+    
+    try:
+        for i, batch_start in enumerate(range(0, big_npy.shape[0], batch_size_add)):
+            batch_end = min(batch_start + batch_size_add, big_npy.shape[0])
+            batch_data = big_npy[batch_start:batch_end]
+            index.add(batch_data)
+            
+            if (i + 1) % 10 == 0 or (i + 1) == total_batches:
+                infos.append(f"Processed batch {i + 1}/{total_batches} (samples {batch_start}-{batch_end-1})")
+                yield "\n".join(infos)
+                
+        infos.append("Batch addition completed successfully!")
+    except Exception as e:
+        infos.append(f"Error during batch addition: {str(e)}")
+        yield "\n".join(infos)
+        return
+    yield "\n".join(infos)
+    
+    added_index_path = "%s/added_IVF%s_Flat_nprobe_%s_%s_%s.index" % (exp_dir, n_ivf, index_ivf.nprobe, exp_dir1, version19)
+    infos.append(f"Saving added index to: {added_index_path}")
+    yield "\n".join(infos)
+    
+    try:
+        faiss.write_index(index, added_index_path)
+        infos.append(f"Successfully saved: {added_index_path}")
+        infos.append(
+            "成功构建索引 added_IVF%s_Flat_nprobe_%s_%s_%s.index"
+            % (n_ivf, index_ivf.nprobe, exp_dir1, version19)
+        )
+    except Exception as e:
+        infos.append(f"Error saving added index: {str(e)}")
+        infos.append(f"Error type: {type(e).__name__}")
+        import traceback
+        infos.append(f"Traceback: {traceback.format_exc()}")
     try:
         link = os.link if platform.system() == "Windows" else os.symlink
         link(

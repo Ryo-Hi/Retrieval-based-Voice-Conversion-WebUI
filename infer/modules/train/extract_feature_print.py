@@ -24,6 +24,9 @@ import soundfile as sf
 import torch
 import torch.nn.functional as F
 
+# Fix for PyTorch 2.6+ weights_only default change
+torch.serialization.add_safe_globals([fairseq.data.dictionary.Dictionary])
+
 if "privateuseone" not in device:
     device = "cpu"
     if torch.cuda.is_available():

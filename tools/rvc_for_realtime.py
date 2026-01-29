@@ -17,6 +17,9 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torchcrepe
 
+# Fix for PyTorch 2.6+ weights_only default change
+torch.serialization.add_safe_globals([fairseq.data.dictionary.Dictionary])
+
 from infer.lib.infer_pack.models import (
     SynthesizerTrnMs256NSFsid,
     SynthesizerTrnMs256NSFsid_nono,
