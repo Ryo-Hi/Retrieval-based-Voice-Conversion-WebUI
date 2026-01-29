@@ -14,9 +14,9 @@ if not exist .venv (
 REM 仮想環境有効化
 call .venv\Scripts\activate.bat
 
-REM pipアップグレード
-echo Upgrading pip...
-python -m pip install --upgrade pip
+REM pip 24.0に固定（omegaconf 2.0.6の壊れたメタデータ対策）
+echo Installing pip 24.0...
+python -m pip install pip==24.0
 
 REM PyTorch (CUDA 11.8) インストール
 echo.
